@@ -1,0 +1,326 @@
+# ☁️ Project Guide: Cloud Security Posture Management (CSPM) on AWS using Prowler
+
+**Difficulty:** Beginner–Intermediate  
+**Estimated Time:** 4–6 hours  
+**Prerequisites:** Basic AWS knowledge, terminal/CLI comfort, a free-tier AWS account
+
+---
+
+## 🗺️ What You Will Learn
+
+By the end of this guide you will be able to:
+- Set up an AWS test environment with intentional misconfigurations
+- Run a full CSPM scan using Prowler
+- Interpret CIS Benchmark findings
+- Write a remediation report mapped to NIST CSF
+- Harden IAM, S3, and EC2 against common vulnerabilities
+
+---
+
+## 🧰 Tools & Accounts Needed
+
+| Tool | Purpose | Cost |
+|------|---------|------|
+| AWS Free Tier Account | Target environment to audit | Free |
+| Prowler v3 | CSPM scanning tool | Free / Open Source |
+| Python 3.8+ | Required by Prowler | Free |
+| AWS CLI v2 | Interact with AWS from terminal | Free |
+| A text editor (VS Code) | Write reports | Free |
+
+---
+
+## PHASE 1 — Set Up Your AWS Environment
+
+### Step 1: Create a Free-Tier AWS Account
+
+1. Go to [https://aws.amazon.com/free](https://aws.amazon.com/free)
+2. Click **Create a Free Account** and complete sign-up
+3. Add a payment method (you will not be charged if you stay within free tier)
+4. Enable **MFA on your root account** — go to IAM → Security Credentials → Enable MFA
+
+> ⚠️ **Important:** You are intentionally creating a *test* environment. Never use a production account for this lab.
+
+---
+
+### Step 2: Create an IAM User with Programmatic Access
+
+1. In AWS Console → **IAM** → **Users** → **Add User**
+2. Username: `prowler-audit-user`
+3. Select **Programmatic access** (generates access key + secret)
+4. Attach policy: `SecurityAudit` + `ViewOnlyAccess` (read-only — enough for Prowler)
+5. Save the **Access Key ID** and **Secret Access Key** securely
+
+---
+
+### Step 3: Intentionally Misconfigure Your Environment (For Lab Purposes)
+
+Create these misconfigurations so Prowler has real findings to detect:
+
+**S3 Bucket:**
+```bash
+# Create a bucket
+aws s3api create-bucket --bucket my-test-bucket-[yourname] --region us-east-1
+
+# Make it public (intentional misconfiguration)
+aws s3api put-bucket-acl --bucket my-test-bucket-[yourname] --acl public-read
+```
+
+**IAM:**
+- Go to IAM → Users → your user → Add permissions → Attach `AdministratorAccess` directly (overly permissive — for lab only)
+- Do NOT enable MFA on this lab IAM user (so Prowler flags it)
+
+**EC2 Security Group:**
+```bash
+# Create a security group that allows all inbound SSH
+aws ec2 create-security-group --group-name "open-sg" --description "Lab SG"
+aws ec2 authorize-security-group-ingress \
+  --group-name "open-sg" \
+  --protocol tcp --port 22 --cidr 0.0.0.0/0
+```
+
+---
+
+## PHASE 2 — Install and Configure Prowler
+
+### Step 4: Install Prowler
+
+```bash
+# Install via pip
+pip install prowler
+
+# Verify installation
+prowler --version
+```
+
+---
+
+### Step 5: Configure AWS CLI with Your Audit User Credentials
+
+```bash
+aws configure
+# Enter when prompted:
+# AWS Access Key ID: [your prowler-audit-user key]
+# AWS Secret Access Key: [your secret]
+# Default region: us-east-1
+# Output format: json
+```
+
+Verify it works:
+```bash
+aws sts get-caller-identity
+# Should return your account ID and user ARN
+```
+
+---
+
+### Step 6: Run a Full Prowler Scan
+
+```bash
+# Full scan — saves results to output/ folder
+prowler aws --output-formats html json csv -o ./findings
+
+# Scan only specific services (faster for practice)
+prowler aws --services iam s3 ec2 --output-formats html csv -o ./findings
+```
+
+This will take **10–20 minutes**. Prowler will check hundreds of controls.
+
+---
+
+## PHASE 3 — Analyse Your Findings
+
+### Step 7: Open the Prowler HTML Report
+
+```bash
+# Open the generated HTML file in your browser
+open ./findings/prowler_output.html
+```
+
+You will see a dashboard with:
+- **PASS / FAIL** results per control
+- Severity levels: Critical, High, Medium, Low
+- CIS Benchmark reference number for each finding
+
+---
+
+### Step 8: Build Your Findings Summary Table
+
+Open the CSV output and create a filtered table of all **FAIL** findings. Use this format:
+
+```
+| # | Service | Finding Description | Severity | CIS Control |
+|---|---------|--------------------|-----------||-------------|
+| 1 | IAM     | Root account has active access keys | Critical | 1.4 |
+| 2 | S3      | Public read ACL enabled | High | 2.1.1 |
+```
+
+Save this as `findings/findings_summary.csv`.
+
+Focus on findings with severity **Critical** or **High** first.
+
+---
+
+## PHASE 4 — Write Your Remediation Report
+
+### Step 9: Understand the NIST CSF Functions
+
+Before writing remediations, map each finding to one of the 5 NIST CSF functions:
+
+| Function | What it means | Example finding |
+|----------|--------------|----------------|
+| **Identify** | Know your assets and risks | No asset inventory tag on EC2 |
+| **Protect** | Implement safeguards | MFA not enabled |
+| **Detect** | Find anomalies early | CloudTrail logging disabled |
+| **Respond** | Plan for incidents | No incident response policy |
+| **Recover** | Restore after incidents | No backup enabled on RDS |
+
+---
+
+### Step 10: Write a Remediation Entry for Each Finding
+
+Use this template for every Critical/High finding:
+
+```markdown
+## Finding: [Finding Title]
+
+**CIS Control:** [e.g., 1.4]
+**Severity:** Critical
+**NIST CSF Function:** Protect
+**Affected Resource:** arn:aws:iam::123456789:root
+
+### Root Cause
+[Why does this exist? e.g., Root account was used to set up the environment and access keys were never deleted.]
+
+### Risk
+[What could an attacker do with this? e.g., Compromise of root access keys gives full unrestricted access to all AWS resources.]
+
+### Remediation Steps
+1. Go to AWS Console → IAM → Security Credentials
+2. Under "Access keys", click Delete on the root access key
+3. Confirm deletion
+4. Verify with: `aws iam get-account-summary`
+
+### Verification
+[How to confirm it is fixed — e.g., Re-run Prowler and confirm this control now shows PASS]
+```
+
+---
+
+### Step 11: Create the NIST CSF Mapping Document
+
+Create `docs/nist_csf_mapping.md` — a table mapping all your findings to NIST CSF:
+
+```markdown
+| Finding | CIS Control | NIST CSF Function | NIST Category |
+|---------|-------------|------------------|---------------|
+| Root access keys active | 1.4 | Protect | PR.AC-1 |
+| MFA not enabled | 1.10 | Protect | PR.AC-7 |
+| Public S3 bucket | 2.1.1 | Protect | PR.DS-5 |
+| Open SSH (0.0.0.0/0) | 5.2 | Protect | PR.AC-5 |
+```
+
+---
+
+## PHASE 5 — Remediate and Verify
+
+### Step 12: Apply Fixes
+
+Work through your Critical and High findings. Key fixes:
+
+**Remove root access keys:**
+```bash
+# Via AWS Console: IAM → Security Credentials → Delete access keys
+```
+
+**Enable MFA on IAM users:**
+```bash
+# Via AWS Console: IAM → Users → Security Credentials → Assign MFA device
+```
+
+**Remove public S3 ACL:**
+```bash
+aws s3api put-bucket-acl --bucket my-test-bucket-[yourname] --acl private
+
+# Also block public access at bucket level
+aws s3api put-public-access-block \
+  --bucket my-test-bucket-[yourname] \
+  --public-access-block-configuration \
+  "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+```
+
+**Restrict SSH security group:**
+```bash
+# Revoke the open 0.0.0.0/0 rule
+aws ec2 revoke-security-group-ingress \
+  --group-name "open-sg" \
+  --protocol tcp --port 22 --cidr 0.0.0.0/0
+
+# Add restricted rule (your IP only)
+aws ec2 authorize-security-group-ingress \
+  --group-name "open-sg" \
+  --protocol tcp --port 22 --cidr [YOUR_IP]/32
+```
+
+---
+
+### Step 13: Re-run Prowler and Compare
+
+```bash
+prowler aws --services iam s3 ec2 --output-formats html csv -o ./findings_after
+```
+
+Compare your before and after reports. Document how many findings moved from **FAIL → PASS**.
+
+Calculate your risk reduction:
+```
+Risk Reduction % = (Findings Fixed / Total Findings) × 100
+```
+
+---
+
+## PHASE 6 — Upload to GitHub
+
+### Step 14: Organise Your Repository
+
+```
+cspm-aws-audit/
+├── README.md                         ← Use the provided README
+├── findings/
+│   ├── prowler_report.html
+│   └── findings_summary.csv
+├── remediation/
+│   └── remediation_guide.md
+└── docs/
+    └── nist_csf_mapping.md
+```
+
+> ⚠️ **Before pushing to GitHub:** Remove any AWS Access Keys, Account IDs, or ARNs from your files. Use `[REDACTED]` as placeholder.
+
+```bash
+git init
+git add .
+git commit -m "Initial commit: CSPM AWS audit using Prowler"
+git remote add origin https://github.com/[yourname]/cspm-aws-audit.git
+git push -u origin main
+```
+
+---
+
+## ✅ Final Checklist
+
+- [ ] AWS test environment created with intentional misconfigurations
+- [ ] Prowler installed and configured
+- [ ] Full scan completed and HTML/CSV report saved
+- [ ] Findings summary table created (Critical + High)
+- [ ] Remediation guide written for each finding
+- [ ] NIST CSF mapping table completed
+- [ ] Fixes applied and Prowler re-run to verify
+- [ ] Repository uploaded to GitHub (no credentials in files)
+
+---
+
+## 💡 Tips for Your Resume / Portfolio
+
+- Screenshot the Prowler dashboard (before & after) and add to your repo's `/docs` folder
+- Add the number of findings fixed to your README (e.g., "Reduced 25 findings to 6 after remediation")
+- This project directly maps to: **Cloud Security Engineer, SOC Analyst L1/L2, Cloud Security Auditor** roles
